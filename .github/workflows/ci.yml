@@ -368,16 +368,9 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           if (-not (Test-Path "WebKit")) {
-            git clone --depth 1 --filter=blob:none https://github.com/WebKit/WebKit.git
-            cd WebKit
-            git sparse-checkout init --cone
-            git sparse-checkout set \
-              Source \
-              Tools \
-              CMakeLists.txt \
-              Makefile \
-              WebKitLibraries
-            git checkout
+            git config --system core.longpaths true
+            git config --global core.longpaths true
+            git clone --depth 1 --branch main https://github.com/WebKit/WebKit.git
           }
 
       - name: Cache build artifacts
