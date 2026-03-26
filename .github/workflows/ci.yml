@@ -1,0 +1,518 @@
+name: Build JSC SDK
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cache WebKit source
+        uses: actions/cache@v4
+        with:
+          path: WebKit
+          key: webkit-source-${{ github.sha }}
+          restore-keys: |
+            webkit-source-
+      
+      - name: Cache build dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ccache
+            /var/cache/apt
+          key: linux-deps-${{ runner.os }}-v1
+          restore-keys: |
+            linux-deps-${{ runner.os }}-
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build ruby python3 python-is-python3 \
+            libicu-dev gperf git subversion perl libglib2.0-dev pkg-config ccache
+
+      - name: Checkout WebKit
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          if [ ! -d "WebKit" ]; then
+            git clone --depth 1 --branch main https://github.com/WebKit/WebKit.git
+          fi
+      
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            WebKit/WebKitBuild
+          key: linux-build-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            linux-build-${{ runner.os }}-
+      
+      - name: Build JSC
+        run: |
+          cd WebKit
+          # Use ccache to speed up rebuilds
+          export CC="ccache gcc"
+          export CXX="ccache g++"
+          # The build script creates the directory structure
+          Tools/Scripts/build-jsc --jsc-only --release
+          
+      - name: Find build output
+        id: find_output
+        run: |
+          cd WebKit
+          # Find the actual build directory (it may vary)
+          if [ -d "WebKitBuild/JSCOnly/Release" ]; then
+            BUILD_DIR="WebKitBuild/JSCOnly/Release"
+          elif [ -d "WebKitBuild/Release" ]; then
+            BUILD_DIR="WebKitBuild/Release"
+          elif [ -d "WebKitBuild/JSC/Release" ]; then
+            BUILD_DIR="WebKitBuild/JSC/Release"
+          elif [ -d "WebKitBuild/GTK/Release" ]; then
+            BUILD_DIR="WebKitBuild/GTK/Release"
+          else
+            echo "Build directory not found. Contents of WebKitBuild:"
+            ls -la WebKitBuild/ || true
+            find WebKitBuild -type d -maxdepth 3 || true
+            exit 1
+          fi
+          echo "build_dir=$BUILD_DIR" >> $GITHUB_OUTPUT
+          echo "Found build directory: $BUILD_DIR"
+          
+      - name: Package SDK
+        run: |
+          cd WebKit
+          BUILD_DIR="${{ steps.find_output.outputs.build_dir }}"
+          
+          mkdir -p /tmp/jsc-sdk/{lib,include,bin}
+          
+          # Find and copy libraries
+          find "$BUILD_DIR" -name "libJavaScriptCore.*" -type f -exec cp {} /tmp/jsc-sdk/lib/ \; || true
+          find "$BUILD_DIR" -name "libjavascriptcoregtk-*" -type f -exec cp {} /tmp/jsc-sdk/lib/ \; || true
+          find "$BUILD_DIR" -name "*.so*" -path "*/lib/*" -exec cp {} /tmp/jsc-sdk/lib/ \; || true
+          
+          # Copy headers - JSC API headers
+          if [ -d "Source/JavaScriptCore/API" ]; then
+            cp Source/JavaScriptCore/API/*.h /tmp/jsc-sdk/include/ 2>/dev/null || true
+          fi
+          
+          # Copy generated headers
+          find "$BUILD_DIR" -path "*/JavaScriptCore/Headers/*" -name "*.h" -exec cp {} /tmp/jsc-sdk/include/ \; 2>/dev/null || true
+          find "$BUILD_DIR" -path "*/DerivedSources/JavaScriptCore/*" -name "*.h" -exec cp {} /tmp/jsc-sdk/include/ \; 2>/dev/null || true
+          
+          # Copy jsc binary
+          find "$BUILD_DIR" -name "jsc" -type f -executable -exec cp {} /tmp/jsc-sdk/bin/ \; || true
+          
+          # Verify we got something
+          echo "=== Contents of SDK package ==="
+          ls -lR /tmp/jsc-sdk/
+          
+          cd /tmp
+          tar czf jsc-linux-x64.tar.gz jsc-sdk/
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jsc-linux-x64
+          path: /tmp/jsc-linux-x64.tar.gz
+
+  build-macos-x64:
+    runs-on: macos-15-intel  # macos-13 was retired Dec 2025; this is the replacement Intel x64 runner
+    steps:
+      - name: Cache WebKit source
+        uses: actions/cache@v4
+        with:
+          path: WebKit
+          key: webkit-source-${{ github.sha }}
+          restore-keys: |
+            webkit-source-
+
+      - name: Cache Homebrew packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /usr/local/Cellar/cmake
+            /usr/local/Cellar/ninja
+          key: macos-x64-brew-${{ runner.os }}-v1
+          restore-keys: |
+            macos-x64-brew-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          brew install cmake ninja || true
+
+      - name: Checkout WebKit
+        run: |
+          if [ ! -d "WebKit" ]; then
+            git clone --depth 1 --branch main https://github.com/WebKit/WebKit.git
+          fi
+
+      - name: Build JSC
+        run: |
+          cd WebKit
+          rm -rf WebKitBuild
+          Tools/Scripts/build-jsc --jsc-only --release
+
+      - name: Find build output
+        id: find_output
+        run: |
+          cd WebKit
+          if [ -d "WebKitBuild/JSCOnly/Release" ]; then
+            BUILD_DIR="WebKitBuild/JSCOnly/Release"
+          elif [ -d "WebKitBuild/Release" ]; then
+            BUILD_DIR="WebKitBuild/Release"
+          elif [ -d "WebKitBuild/JSC/Release" ]; then
+            BUILD_DIR="WebKitBuild/JSC/Release"
+          else
+            echo "Build directory not found. Contents of WebKitBuild:"
+            ls -la WebKitBuild/ || true
+            find WebKitBuild -type d -maxdepth 3 || true
+            exit 1
+          fi
+          echo "build_dir=$BUILD_DIR" >> $GITHUB_OUTPUT
+          echo "Found build directory: $BUILD_DIR"
+
+      - name: Package SDK
+        run: |
+          cd WebKit
+          BUILD_DIR="${{ steps.find_output.outputs.build_dir }}"
+
+          mkdir -p /tmp/jsc-sdk
+
+          if [ -d "$BUILD_DIR/JavaScriptCore.framework" ]; then
+            cp -R "$BUILD_DIR/JavaScriptCore.framework" /tmp/jsc-sdk/
+          else
+            mkdir -p /tmp/jsc-sdk/{lib,include,bin}
+            find "$BUILD_DIR" -name "libJavaScriptCore.*" -exec cp {} /tmp/jsc-sdk/lib/ \; || true
+            find "$BUILD_DIR" -name "*.dylib" -exec cp {} /tmp/jsc-sdk/lib/ \; || true
+            cp -R Source/JavaScriptCore/API/*.h /tmp/jsc-sdk/include/ 2>/dev/null || true
+            find "$BUILD_DIR" -name "*.h" -path "*/JavaScriptCore/*" -exec cp {} /tmp/jsc-sdk/include/ \; 2>/dev/null || true
+          fi
+
+          find "$BUILD_DIR" -name "jsc" -type f -perm +111 -exec cp {} /tmp/jsc-sdk/bin/ \; 2>/dev/null || true
+
+          echo "=== Contents of SDK package ==="
+          ls -lR /tmp/jsc-sdk/
+
+          cd /tmp
+          tar czf jsc-macos-x64.tar.gz jsc-sdk/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jsc-macos-x64
+          path: /tmp/jsc-macos-x64.tar.gz
+
+  build-macos-aarch64:
+    runs-on: macos-15  # macos-14 SDK lacks MPO_EXCEPTION_PORT which was added in the macOS 15 SDK
+    steps:
+      - name: Cache WebKit source
+        uses: actions/cache@v4
+        with:
+          path: WebKit
+          key: webkit-source-${{ github.sha }}
+          restore-keys: |
+            webkit-source-
+      
+      - name: Cache Homebrew packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /usr/local/Cellar/cmake
+            /usr/local/Cellar/ninja
+          key: macos-aarch64-brew-${{ runner.os }}-v1
+          restore-keys: |
+            macos-aarch64-brew-${{ runner.os }}-
+      
+      - name: Install dependencies
+        run: |
+          # macOS usually has most dependencies
+          # Install any missing ones via homebrew if needed
+          brew install cmake ninja || true
+      
+      - name: Checkout WebKit
+        run: |
+          if [ ! -d "WebKit" ]; then
+            git clone --depth 1 --branch main https://github.com/WebKit/WebKit.git
+          fi
+      
+      - name: Build JSC
+        run: |
+          cd WebKit
+          rm -rf WebKitBuild
+          Tools/Scripts/build-jsc --jsc-only --release
+
+      - name: Find build output
+        id: find_output
+        run: |
+          cd WebKit
+          # Find the actual build directory
+          if [ -d "WebKitBuild/JSCOnly/Release" ]; then
+            BUILD_DIR="WebKitBuild/JSCOnly/Release"
+          elif [ -d "WebKitBuild/Release" ]; then
+            BUILD_DIR="WebKitBuild/Release"
+          elif [ -d "WebKitBuild/JSC/Release" ]; then
+            BUILD_DIR="WebKitBuild/JSC/Release"
+          else
+            echo "Build directory not found. Contents of WebKitBuild:"
+            ls -la WebKitBuild/ || true
+            find WebKitBuild -type d -maxdepth 3 || true
+            exit 1
+          fi
+          echo "build_dir=$BUILD_DIR" >> $GITHUB_OUTPUT
+          echo "Found build directory: $BUILD_DIR"
+          
+      - name: Package SDK
+        run: |
+          cd WebKit
+          BUILD_DIR="${{ steps.find_output.outputs.build_dir }}"
+          
+          mkdir -p /tmp/jsc-sdk
+          
+          # On macOS, look for the framework
+          if [ -d "$BUILD_DIR/JavaScriptCore.framework" ]; then
+            cp -R "$BUILD_DIR/JavaScriptCore.framework" /tmp/jsc-sdk/
+          else
+            # Fallback: manual packaging
+            mkdir -p /tmp/jsc-sdk/{lib,include,bin}
+            find "$BUILD_DIR" -name "libJavaScriptCore.*" -exec cp {} /tmp/jsc-sdk/lib/ \; || true
+            find "$BUILD_DIR" -name "*.dylib" -exec cp {} /tmp/jsc-sdk/lib/ \; || true
+            cp -R Source/JavaScriptCore/API/*.h /tmp/jsc-sdk/include/ 2>/dev/null || true
+            find "$BUILD_DIR" -name "*.h" -path "*/JavaScriptCore/*" -exec cp {} /tmp/jsc-sdk/include/ \; 2>/dev/null || true
+          fi
+          
+          # Copy jsc binary
+          find "$BUILD_DIR" -name "jsc" -type f -perm +111 -exec cp {} /tmp/jsc-sdk/bin/ \; 2>/dev/null || true
+          
+          # Verify contents
+          echo "=== Contents of SDK package ==="
+          ls -lR /tmp/jsc-sdk/
+          
+          cd /tmp
+          tar czf jsc-macos-aarch64.tar.gz jsc-sdk/
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jsc-macos-aarch64
+          path: /tmp/jsc-macos-aarch64.tar.gz
+
+  build-windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - name: Cache WebKit source
+        uses: actions/cache@v4
+        with:
+          path: WebKit
+          key: webkit-source-${{ github.sha }}
+          restore-keys: |
+            webkit-source-
+      
+      - name: Cache Chocolatey packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\ProgramData\chocolatey\lib
+            C:\Program Files\CMake
+            C:\tools\ninja
+          key: windows-choco-${{ runner.os }}-v1
+          restore-keys: |
+            windows-choco-${{ runner.os }}-
+
+      # CHANGED: added llvm (provides clang-cl.exe + lld-link.exe)
+      - name: Setup dependencies
+        run: |
+          choco install -y cmake ninja strawberryperl python3 ruby git llvm
+          $machinePath = [System.Environment]::GetEnvironmentVariable("PATH","Machine")
+          $userPath    = [System.Environment]::GetEnvironmentVariable("PATH","User")
+          echo "PATH=$machinePath;$userPath" >> $env:GITHUB_ENV
+        shell: powershell
+          
+      - name: Setup VS environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # ADDED: Strawberry Perl's c\bin ships its own link.exe and gcc which
+      # shadow MSVC's link.exe and LLD, causing the clang_rt.builtins error.
+      - name: Strip Strawberry Perl C and MinGW from PATH
+        shell: powershell
+        run: |
+          $clean = ($env:PATH -split ";") |
+            Where-Object { $_ -notmatch "(?i)Strawberry\\c\\bin" } |
+            Where-Object { $_ -notmatch "(?i)mingw" } |
+            Where-Object { $_ -ne "" }
+          echo "PATH=$($clean -join ';')" >> $env:GITHUB_ENV
+
+      # ADDED: vcpkg (pre-installed on GitHub Windows runners) provides a
+      # static ICU build. /DU_STATIC_IMPLEMENTATION tells ICU headers we
+      # are linking statically.
+      - name: Cache vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-icu-x64-windows-static-v1
+          restore-keys: |
+            vcpkg-icu-x64-windows-static-
+
+      - name: Install ICU (static) via vcpkg
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        shell: powershell
+        run: vcpkg install icu:x64-windows-static --recurse
+          
+      - name: Checkout WebKit
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          if (-not (Test-Path "WebKit")) {
+            git clone --depth 1 --branch main https://github.com/WebKit/WebKit.git
+          }
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: WebKit\WebKitBuild
+          key: windows-build-${{ runner.os }}-v2-${{ github.sha }}
+          restore-keys: |
+            windows-build-${{ runner.os }}-v2-
+
+      # CHANGED: replaced build-jsc + cl.exe with direct cmake + clang-cl.
+      # Root cause of the original error: cl.exe was the compiler but WebKit's
+      # CMake still linked against LLVM's clang_rt.builtins. Using clang-cl
+      # throughout (as Bun's build script does) makes the toolchain consistent.
+      - name: Build JSC with clang-cl
+        shell: powershell
+        run: |
+          $ICU_ROOT = "C:\vcpkg\installed\x64-windows-static"
+          Set-Location WebKit
+          cmake -S . -B WebKitBuild `
+            -G Ninja `
+            -DPORT=JSCOnly `
+            -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_C_COMPILER=C:/Program Files/LLVM/bin/clang-cl.exe" `
+            "-DCMAKE_CXX_COMPILER=C:/Program Files/LLVM/bin/clang-cl.exe" `
+            "-DCMAKE_LINKER=C:/Program Files/LLVM/bin/lld-link.exe" `
+            -DUSE_THIN_ARCHIVES=OFF `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            "-DICU_ROOT=$ICU_ROOT" `
+            "-DICU_LIBRARY=$ICU_ROOT\lib" `
+            "-DICU_INCLUDE_DIR=$ICU_ROOT\include" `
+            "-DCMAKE_C_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /DU_STATIC_IMPLEMENTATION" `
+            "-DCMAKE_CXX_FLAGS_RELEASE=/O2 /Ob2 /DNDEBUG /DU_STATIC_IMPLEMENTATION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # The ninja-generated bat wrappers for Ruby codegen steps do
+          # `cd /D WebKitBuild\Source\JavaScriptCore` but that directory is
+          # never created by the flat JSCOnly cmake layout. Pre-create it so
+          # cmd.exe doesn't abort before ruby.exe runs. Must be done after
+          # cmake configure (which creates WebKitBuild) but before cmake build.
+          $buildRoot = (Get-Location).Path + "\WebKitBuild"
+          Write-Host "Build root: $buildRoot"
+          $null = New-Item -ItemType Directory -Force "$buildRoot\Source\JavaScriptCore"
+          $null = New-Item -ItemType Directory -Force "$buildRoot\Source\WTF"
+          Write-Host "Directories created:"
+          Get-ChildItem "$buildRoot\Source" | Format-Table Name
+
+          cmake --build WebKitBuild --config Release --target jsc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          
+      - name: Find build output
+        shell: powershell
+        id: find_output
+        run: |
+          cd WebKit
+          $buildDir = $null
+          
+          if (Test-Path "WebKitBuild\JSCOnly\Release") {
+            $buildDir = "WebKitBuild\JSCOnly\Release"
+          } elseif (Test-Path "WebKitBuild\Release") {
+            $buildDir = "WebKitBuild\Release"
+          } elseif (Test-Path "WebKitBuild\JSC\Release") {
+            $buildDir = "WebKitBuild\JSC\Release"
+          } elseif (Test-Path "WebKitBuild\bin\jsc.exe") {
+            # cmake -DPORT=JSCOnly puts outputs directly under WebKitBuild
+            $buildDir = "WebKitBuild"
+          } else {
+            Write-Host "Build directory not found. Contents of WebKitBuild:"
+            Get-ChildItem WebKitBuild -ErrorAction SilentlyContinue | Format-Table
+            Get-ChildItem WebKitBuild -Recurse -Directory -Depth 2 -ErrorAction SilentlyContinue | Format-Table
+            exit 1
+          }
+          
+          echo "build_dir=$buildDir" >> $env:GITHUB_OUTPUT
+          Write-Host "Found build directory: $buildDir"
+          
+      - name: Package SDK
+        shell: powershell
+        run: |
+          cd $env:GITHUB_WORKSPACE\WebKit
+          $BUILD_DIR = "${{ steps.find_output.outputs.build_dir }}"
+      
+          # Create SDK folder
+          $sdkPath = "$env:GITHUB_WORKSPACE\jsc-sdk"
+          New-Item -ItemType Directory -Force -Path "$sdkPath\lib","$sdkPath\include","$sdkPath\bin"
+      
+          # Copy libraries (all .lib and .dll in the build dir)
+          Get-ChildItem -Path $BUILD_DIR -Recurse -Include *.lib,*.dll -ErrorAction SilentlyContinue |
+            Copy-Item -Destination "$sdkPath\lib" -Force
+      
+          # Copy headers
+          if (Test-Path "Source\JavaScriptCore\API") {
+            Get-ChildItem -Path Source\JavaScriptCore\API -Filter *.h -ErrorAction SilentlyContinue | 
+              Copy-Item -Destination "$sdkPath\include" -Force
+          }
+      
+          Get-ChildItem -Path $BUILD_DIR -Recurse -Filter *.h -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "JavaScriptCore" } |
+            Copy-Item -Destination "$sdkPath\include" -Force
+      
+          # Copy binaries (jsc.exe)
+          Get-ChildItem -Path $BUILD_DIR -Recurse -Include jsc.exe -ErrorAction SilentlyContinue |
+            Copy-Item -Destination "$sdkPath\bin" -Force
+      
+          # Verify contents
+          Write-Host "=== SDK package contents ==="
+          Get-ChildItem -Recurse $sdkPath | Format-Table
+      
+          # Create ZIP in workspace so upload-artifact can find it
+          Compress-Archive -Path "$sdkPath\*" -DestinationPath "$env:GITHUB_WORKSPACE\jsc-windows-x64.zip" -Force
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jsc-windows-x64
+          path: jsc-windows-x64.zip
+
+  release:
+    needs: [build-linux, build-macos-x64, build-macos-aarch64, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') && always()
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            jsc-linux-x64/*.tar.gz
+            jsc-macos-x64/*.tar.gz
+            jsc-macos-aarch64/*.tar.gz
+            jsc-windows-x64/*.zip
+          draft: false
+          prerelease: false
+          body: |
+            JavaScriptCore SDK build from WebKit main branch
+            
+            Includes headers, libraries, and jsc binary for supported platforms.
+            
+            **Note**: Windows builds are experimental. If not included, use WSL2 with the Linux build.
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
