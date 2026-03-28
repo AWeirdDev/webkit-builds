@@ -14,14 +14,6 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     steps:
-      - name: Cache WebKit source
-        uses: actions/cache@v4
-        with:
-          path: WebKit
-          key: webkit-source-${{ github.sha }}
-          restore-keys: |
-            webkit-source-
-      
       - name: Cache build dependencies
         uses: actions/cache@v4
         with:
@@ -39,20 +31,8 @@ jobs:
             libicu-dev gperf git subversion perl libglib2.0-dev pkg-config ccache
 
       - name: Checkout WebKit
-        if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          if [ ! -d "WebKit" ]; then
             git clone --depth 1 --branch ${{ inputs.tag }} https://github.com/WebKit/WebKit.git
-          fi
-      
-      - name: Cache build artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            WebKit/WebKitBuild
-          key: linux-build-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            linux-build-${{ runner.os }}-
       
       - name: Build JSC
         run: |
@@ -125,14 +105,6 @@ jobs:
   build-macos-x64:
     runs-on: macos-15-intel  # macos-13 was retired Dec 2025; this is the replacement Intel x64 runner
     steps:
-      - name: Cache WebKit source
-        uses: actions/cache@v4
-        with:
-          path: WebKit
-          key: webkit-source-${{ github.sha }}
-          restore-keys: |
-            webkit-source-
-
       - name: Cache Homebrew packages
         uses: actions/cache@v4
         with:
@@ -150,9 +122,7 @@ jobs:
 
       - name: Checkout WebKit
         run: |
-          if [ ! -d "WebKit" ]; then
-            git clone --depth 1 --branch ${{ inputs.tag }} https://github.com/WebKit/WebKit.git
-          fi
+          git clone --depth 1 --branch ${{ inputs.tag }} https://github.com/WebKit/WebKit.git
 
       - name: Build JSC
         run: |
@@ -213,14 +183,6 @@ jobs:
   build-macos-aarch64:
     runs-on: macos-15  # macos-14 SDK lacks MPO_EXCEPTION_PORT which was added in the macOS 15 SDK
     steps:
-      - name: Cache WebKit source
-        uses: actions/cache@v4
-        with:
-          path: WebKit
-          key: webkit-source-${{ github.sha }}
-          restore-keys: |
-            webkit-source-
-      
       - name: Cache Homebrew packages
         uses: actions/cache@v4
         with:
@@ -240,9 +202,7 @@ jobs:
       
       - name: Checkout WebKit
         run: |
-          if [ ! -d "WebKit" ]; then
-            git clone --depth 1 --branch ${{ inputs.tag }} https://github.com/WebKit/WebKit.git
-          fi
+          git clone --depth 1 --branch ${{ inputs.tag }} https://github.com/WebKit/WebKit.git
       
       - name: Build JSC
         run: |
@@ -307,16 +267,7 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
-    continue-on-error: true
     steps:
-      - name: Cache WebKit source
-        uses: actions/cache@v4
-        with:
-          path: WebKit
-          key: webkit-source-${{ github.sha }}
-          restore-keys: |
-            webkit-source-
-      
       - name: Cache Chocolatey packages
         uses: actions/cache@v4
         with:
@@ -371,21 +322,10 @@ jobs:
         run: vcpkg install icu:x64-windows-static --recurse
           
       - name: Checkout WebKit
-        if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          if (-not (Test-Path "WebKit")) {
             git config --system core.longpaths true
             git config --global core.longpaths true
             git clone --depth 1 --branch ${{ inputs.tag }} https://github.com/WebKit/WebKit.git
-          }
-
-      - name: Cache build artifacts
-        uses: actions/cache@v4
-        with:
-          path: WebKit\WebKitBuild
-          key: windows-build-${{ runner.os }}-v2-${{ github.sha }}
-          restore-keys: |
-            windows-build-${{ runner.os }}-v2-
 
       # CHANGED: replaced build-jsc + cl.exe with direct cmake + clang-cl.
       # Root cause of the original error: cl.exe was the compiler but WebKit's
@@ -503,12 +443,11 @@ jobs:
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
-        continue-on-error: true
         
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          name: ${{ github.sha }}
+          name: ${{ inputs.tag }}
           files: |
             jsc-linux-x64/*.tar.gz
             jsc-macos-x64/*.tar.gz
@@ -517,7 +456,7 @@ jobs:
           draft: false
           prerelease: false
           body: |
-            JavaScriptCore build.
+            sha: ${{ github.sha }}
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
