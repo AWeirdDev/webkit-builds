@@ -1,6 +1,12 @@
 name: Build JSC SDK
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The tag of the WebKit release (as a branch)'
+        required: false
+        default: 'main'
+        type: string
   push:
     tags: ['v*']
 
@@ -36,7 +42,7 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           if [ ! -d "WebKit" ]; then
-            git clone --depth 1 --branch main https://github.com/WebKit/WebKit.git
+            git clone --depth 1 --branch ${{ inputs.tag }} https://github.com/WebKit/WebKit.git
           fi
       
       - name: Cache build artifacts
@@ -145,7 +151,7 @@ jobs:
       - name: Checkout WebKit
         run: |
           if [ ! -d "WebKit" ]; then
-            git clone --depth 1 --branch main https://github.com/WebKit/WebKit.git
+            git clone --depth 1 --branch ${{ inputs.tag }} https://github.com/WebKit/WebKit.git
           fi
 
       - name: Build JSC
@@ -235,7 +241,7 @@ jobs:
       - name: Checkout WebKit
         run: |
           if [ ! -d "WebKit" ]; then
-            git clone --depth 1 --branch main https://github.com/WebKit/WebKit.git
+            git clone --depth 1 --branch ${{ inputs.tag }} https://github.com/WebKit/WebKit.git
           fi
       
       - name: Build JSC
@@ -370,7 +376,7 @@ jobs:
           if (-not (Test-Path "WebKit")) {
             git config --system core.longpaths true
             git config --global core.longpaths true
-            git clone --depth 1 --branch main https://github.com/WebKit/WebKit.git
+            git clone --depth 1 --branch ${{ inputs.tag }} https://github.com/WebKit/WebKit.git
           }
 
       - name: Cache build artifacts
@@ -502,6 +508,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
+          name: ${{ github.sha }}
           files: |
             jsc-linux-x64/*.tar.gz
             jsc-macos-x64/*.tar.gz
@@ -510,11 +517,7 @@ jobs:
           draft: false
           prerelease: false
           body: |
-            JavaScriptCore SDK build from WebKit main branch
-            
-            Includes headers, libraries, and jsc binary for supported platforms.
-            
-            **Note**: Windows builds are experimental. If not included, use WSL2 with the Linux build.
+            JavaScriptCore build.
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
