@@ -456,7 +456,7 @@ jobs:
           draft: false
           prerelease: false
           body: |
-            sha: ${{ github.sha }}
+            sha (this repo): ${{ github.sha }}
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
