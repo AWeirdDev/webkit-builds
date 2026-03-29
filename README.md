@@ -1,2 +1,2 @@
 # webkit builds
-fuck you actually no fuck c
+see more on the releases tab
